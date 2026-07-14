@@ -1,0 +1,25 @@
+sahaj
+Copyright 2026 Saiprasad Shankar
+
+This product includes software developed by Saiprasad Shankar.
+Licensed under the Apache License, Version 2.0.
+
+---
+
+Independent community open-source library. Not affiliated with, endorsed by,
+sponsored by, or certified by NPCI, RBI, SEBI, IRDAI, PFRDA, the Sahamati
+Foundation, ReBIT, or any Account Aggregator, FIP, FIU, or TSP.
+
+Using this software does not grant access to or membership in the Account
+Aggregator network. Production use of the AA ecosystem is gated on your own
+regulatory eligibility (an entity regulated by RBI, SEBI, IRDAI, or PFRDA, or
+the TSP route on behalf of such an entity).
+
+Provided AS IS. Nothing in this project is legal, regulatory, or compliance
+advice. You are solely responsible for your regulatory eligibility and for
+compliance with the RBI NBFC-Account Aggregator Master Directions and the
+Digital Personal Data Protection Act, 2023.
+
+"Account Aggregator", "ReBIT", "Sahamati", "NPCI", and "UPI" are used only
+descriptively to identify the ecosystem this library targets, and remain the
+marks of their respective owners.
