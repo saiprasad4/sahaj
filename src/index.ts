@@ -54,6 +54,42 @@ export type {
   SandboxControls,
 } from './adapters/adapter';
 
+// ── Crypto core ──────────────────────────────────────────────────────────────
+export {
+  generateEphemeralKeyPair,
+  deriveSharedSecret,
+  assertPeerPublicKey,
+  zeroize,
+  generateNonce,
+  generateRequesterKeyMaterial,
+  deriveSessionKeyAndIv,
+  encryptFi,
+  decryptFi,
+  buildKeyMaterialJson,
+  parseKeyMaterialJson,
+  bytesToBase64,
+  base64ToBytes,
+  bytesToPem,
+  pemOrBase64ToBytes,
+  LocalRsaSigner,
+  signRequestBody,
+  verifyRequestBody,
+  JWS_HEADER_NAME,
+} from './crypto';
+export type {
+  DhCurve,
+  EphemeralKeyPair,
+  DecodedKeyMaterial,
+  OurKeyMaterial,
+  KeyMaterialJson,
+  DhPublicKeyJson,
+  JwsSigner,
+} from './crypto';
+
+// ── Setu adapter ─────────────────────────────────────────────────────────────
+export { SetuAdapter } from './adapters/setu';
+export type { SetuAdapterOptions, FetchLike, ResolveResponsePublicKey } from './adapters/setu';
+
 // ── Sandbox ──────────────────────────────────────────────────────────────────
 export { MockAdapter } from './adapters/mock';
 export type { MockAdapterOptions } from './adapters/mock';

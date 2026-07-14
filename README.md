@@ -103,12 +103,59 @@ interface AAAdapter {
 }
 ```
 
+## The Setu adapter (real AA, in-SDK decryption)
+
+The first real provider adapter targets Setu's (now Agya, Pine Labs) self-managed ReBIT AA API. It is the AA analogue of the sandbox: the same `consents.create` then `data.fetch` surface, now against a live aggregator. Crucially, FI payloads are decrypted **inside the SDK, on your infrastructure**. The adapter deliberately does not use Setu's hosted Rahasya decryption service, so your keys and your decrypted data never leave your process.
+
+```ts
+import { AA, LocalRsaSigner } from '@saiprasad4/sahaj';
+
+const aa = new AA({
+  mode: 'setu-sandbox',
+  setu: {
+    baseUrl: process.env.SETU_AA_BASE_URL!, // Setu's self-managed AA host, from your credentials
+    clientApiKey: process.env.SETU_CLIENT_API_KEY!,
+    fiuId: process.env.SETU_FIU_ID!,
+    signer: new LocalRsaSigner({
+      kid: process.env.SETU_SIGNING_KID!,
+      privateKeyPkcs8Pem: process.env.SETU_SIGNING_KEY_PKCS8!, // your RS256 key, stays on your infra
+    }),
+    curve: 'Curve25519', // or 'X25519'
+  },
+});
+
+const consent = await aa.consents.create({ mobile, fiTypes: ['DEPOSIT'], purpose, duration: 'P90D' });
+const data = await aa.data.fetch(consent.id); // signs the request, fetches encryptedFI, decrypts in-SDK
+```
+
+For a non-exportable signing key, implement the `JwsSigner` interface against your KMS/HSM and pass it as `signer` instead of `LocalRsaSigner`. The SDK hands the signer the exact JWS signing input and never sees the private key.
+
+To verify the AA's own signature on responses, pass `resolveResponsePublicKey` (a `kid` -> SPKI PEM lookup). When set, each response's detached `x-jws-signature` is verified over the raw body before it is parsed, and a missing or invalid signature fails closed. Confidentiality already fails closed regardless, since a tampered `KeyMaterial` only yields a GCM tag mismatch on decryption.
+
+### Running the live loop
+
+Live Setu credentials are not bundled. To run against the real sandbox:
+
+1. Register on Setu's "The Bridge" (`https://bridge.setu.co`), add the Account Aggregator product, and provision the self-managed / ReBIT API. Confirm your credentials map to the self-managed product that returns `encryptedFI`, not the managed product that decrypts server-side.
+2. Obtain from Setu: the self-managed AA base URL, your `client_api_key`, your FIU id, and your RS256 request-signing keypair (register the public key with Setu).
+3. Set the env vars the gated integration test reads: `SETU_AA_BASE_URL`, `SETU_CLIENT_API_KEY`, `SETU_FIU_ID`, `SETU_SIGNING_KID`, `SETU_SIGNING_KEY_PKCS8`, `SETU_TEST_MOBILE` (a whitelisted sandbox mobile), and optionally `SETU_VUA_HANDLE` and `SETU_CURVE`.
+4. Run `npm test`. The live test in `test/adapters/setu.live.test.ts` skips itself unless all required vars are present.
+
+## The crypto core
+
+The FI encryption and request signing follow the exact ReBIT/rahasya scheme, built only on audited primitives (`@noble/curves`, `@noble/ciphers`, `@noble/hashes`, `jose`), never hand-rolled:
+
+- FI payloads: ECDH -> HKDF-SHA256 -> AES-256-GCM, with a fresh ephemeral keypair and CSPRNG nonce per request. Both curve variants are supported: legacy short-Weierstrass `Curve25519` (ReBIT v1.x) and RFC 7748 Montgomery `X25519` (ReBIT v2.0.0). The curve and key length are validated before ECDH, since a curve mismatch is the ecosystem's most common "mac check in GCM failed" bug.
+- Request signing: detached RS256 JWS (`x-jws-signature`, `b64:false`, `crit:["b64"]`), verified before deserialization with an RS256 allow-list that rejects `alg:none` and downgrades.
+
+The primitives are exported (`encryptFi`, `decryptFi`, `signRequestBody`, `verifyRequestBody`, `generateEphemeralKeyPair`, ...) if you need them directly.
+
 ## Where this is
 
-This is v0.1, and it is deliberately sandbox-only.
+This is v0.1.
 
 - DEPOSIT is modelled end to end. The other ReBIT FI types are declared and land with their parsers next.
-- Real provider adapters (Setu first, then Finvu) arrive in a later milestone. Until then, `mode: 'production'` needs an adapter you supply.
+- The Setu adapter is the first real provider (Finvu next). `mode: 'production'` accepts any adapter you supply; `mode: 'setu-sandbox'` builds the Setu adapter from config.
 - The SDK runs entirely on your own infrastructure. It never receives your keys, your decrypted data, or your consent artefacts, and it ships no telemetry. That is a deliberate line: it keeps you, not this library, in control of the data.
 
 ## License
