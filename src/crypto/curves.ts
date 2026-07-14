@@ -28,7 +28,7 @@ import type { DhCurve, EphemeralKeyPair } from './types';
  * `org.bouncycastle.math.ec.custom.djb.Curve25519` exactly and the generator was
  * checked to satisfy y^2 = x^3 + a*x + b (mod p).
  */
-const CURVE25519_WEIERSTRASS: {
+export const CURVE25519_WEIERSTRASS: {
   p: bigint;
   a: bigint;
   b: bigint;
