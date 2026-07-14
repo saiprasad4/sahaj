@@ -74,6 +74,7 @@ function sampleDepositFi(): RawDepositFi {
 function buildFipStub(options: {
   curve: DhCurve;
   fi?: RawDepositFi;
+  fis?: RawDepositFi[];
   corruptCiphertext?: boolean;
 }): FetchLike {
   let fiuKeyMaterial: KeyMaterialJson | undefined;
@@ -101,21 +102,26 @@ function buildFipStub(options: {
       }
       const fiuDecoded = parseKeyMaterialJson(fiuKeyMaterial, options.curve);
 
-      // The FIP generates its own ephemeral key + nonce and encrypts to the FIU.
+      // The FIP generates its own ephemeral key + nonce and encrypts each account
+      // block to the FIU under that one KeyMaterial, as a real FIP does per request.
       const fipKeyPair = generateEphemeralKeyPair(options.curve);
       const fipNonce = generateNonce();
-      const plaintext = new TextEncoder().encode(JSON.stringify(options.fi ?? sampleDepositFi()));
-      const encryptedFi = encryptFi({
-        curve: options.curve,
-        ourPrivateKey: fipKeyPair.privateKey,
-        ourNonce: fipNonce,
-        peerPublicKey: fiuDecoded.publicKey,
-        peerNonce: fiuDecoded.nonce,
-        plaintext,
+      const payloads = options.fis ?? [options.fi ?? sampleDepositFi()];
+      const dataBlocks = payloads.map((payload, index) => {
+        const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+        const cipher = encryptFi({
+          curve: options.curve,
+          ourPrivateKey: fipKeyPair.privateKey,
+          ourNonce: fipNonce,
+          peerPublicKey: fiuDecoded.publicKey,
+          peerNonce: fiuDecoded.nonce,
+          plaintext,
+        });
+        if (options.corruptCiphertext && index === 0) {
+          cipher.set([(cipher.at(0) ?? 0) ^ 0xff], 0);
+        }
+        return { linkRefNumber: payload.Account.linkedAccRef, encryptedFI: base64(cipher) };
       });
-      if (options.corruptCiphertext) {
-        encryptedFi.set([(encryptedFi.at(0) ?? 0) ^ 0xff], 0);
-      }
 
       const fipKeyMaterial = buildKeyMaterialJson({
         curve: options.curve,
@@ -127,14 +133,7 @@ function buildFipStub(options: {
       return jsonResponse({
         ver: '1.1.2',
         status: 'COMPLETED',
-        FI: [
-          {
-            fipID: 'setu-fip',
-            fipName: 'Setu FIP',
-            KeyMaterial: fipKeyMaterial,
-            data: [{ linkRefNumber: 'setu-fip-11223344', encryptedFI: base64(encryptedFi) }],
-          },
-        ],
+        FI: [{ fipID: 'setu-fip', fipName: 'Setu FIP', KeyMaterial: fipKeyMaterial, data: dataBlocks }],
       });
     }
 
@@ -163,6 +162,7 @@ function makeAdapter(overrides: Partial<Parameters<typeof buildFipStub>[0]> = {}
     signer: makeSigner(),
     curve,
     httpClient: buildFipStub({ curve, ...overrides }),
+    allowUnsignedResponses: true,
   });
 }
 
@@ -219,6 +219,19 @@ describe('SetuAdapter failure handling', () => {
     ).toThrow(SahajError);
   });
 
+  it('refuses to construct without response verification unless explicitly allowed', () => {
+    expect(
+      () =>
+        new SetuAdapter({
+          baseUrl: 'https://fiu-sandbox.setu-aa.example',
+          clientApiKey: 'k',
+          fiuId: 'f',
+          signer: makeSigner(),
+          // no resolveResponsePublicKey and no allowUnsignedResponses
+        }),
+    ).toThrow(SahajError);
+  });
+
   it('signs every mutating request with an x-jws-signature header', async () => {
     const seenHeaders: Array<Record<string, string>> = [];
     const curve: DhCurve = 'Curve25519';
@@ -234,6 +247,7 @@ describe('SetuAdapter failure handling', () => {
       signer: makeSigner(),
       curve,
       httpClient: recording,
+      allowUnsignedResponses: true,
     });
 
     const consent = await adapter.createConsent({ ...consentRequest, fiTypes: ['DEPOSIT'] });
@@ -259,10 +273,56 @@ describe('SetuAdapter failure handling', () => {
       fiuId: 'f',
       signer: makeSigner(),
       httpClient: failing,
+      allowUnsignedResponses: true,
     });
     await expect(adapter.createConsent({ ...consentRequest, fiTypes: ['DEPOSIT'] })).rejects.toMatchObject({
       code: 'TOKEN_EXPIRED',
     });
+  });
+});
+
+describe('SetuAdapter multi-account FIP', () => {
+  it('decrypts every account block a FIP returns, not just the first', async () => {
+    const first = sampleDepositFi();
+    const second: RawDepositFi = {
+      Account: { ...first.Account, maskedAccNumber: 'XXXXXX8899', linkedAccRef: 'setu-fip-55667788' },
+    };
+    const adapter = makeAdapter({ fis: [first, second] });
+
+    const consent = await adapter.createConsent({ ...consentRequest, fiTypes: ['DEPOSIT'] });
+    await adapter.getConsentStatus(consent.id);
+    const session = await adapter.createSession(consent.id);
+    const fips = await adapter.fetchData(consent.id, session.id);
+
+    expect(fips).toHaveLength(2);
+    expect(fips.every((fip) => fip.status === 'DELIVERED')).toBe(true);
+    expect(fips.map((fip) => fip.payload?.Account.maskedAccNumber).sort()).toEqual([
+      'XXXXXX4321',
+      'XXXXXX8899',
+    ]);
+  });
+});
+
+describe('SetuAdapter consent rehydration', () => {
+  it('resumes a consent in a fresh adapter via export then hydrate', async () => {
+    const curve: DhCurve = 'Curve25519';
+    const original = makeAdapter({ curve });
+    const consent = await original.createConsent({ ...consentRequest, fiTypes: ['DEPOSIT'] });
+    const snapshot = original.exportConsentState(consent.id);
+
+    // A fresh adapter with its own stub, as if the process had restarted.
+    const resumed = makeAdapter({ curve });
+    resumed.hydrateConsentState(snapshot);
+
+    expect(await resumed.getConsentStatus(consent.id)).toBe('ACTIVE');
+    const session = await resumed.createSession(consent.id);
+    const fips = await resumed.fetchData(consent.id, session.id);
+    expect(fips[0]?.status).toBe('DELIVERED');
+  });
+
+  it('throws for an unknown consent handle before it is hydrated', async () => {
+    const adapter = makeAdapter();
+    await expect(adapter.createSession('never-seen')).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 });
 

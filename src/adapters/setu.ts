@@ -91,13 +91,28 @@ export interface SetuAdapterOptions {
   /** Redirect URL the user returns to after the consent webview. */
   readonly redirectUrl?: string;
   /**
-   * When set, the AA's detached `x-jws-signature` on every response is verified
-   * over the raw response body BEFORE it is parsed, resolving the signing cert by
-   * the header `kid`. This is the response-side counterpart to signing our
-   * requests. If a response carries no signature header, verification fails closed.
-   * Leave unset only in test/sandbox setups that do not sign responses.
+   * Resolves the AA/router signing cert (SPKI PEM) for a response `kid`. When
+   * present, every response's detached `x-jws-signature` is verified over the raw
+   * body BEFORE it is parsed, and a missing or invalid signature fails closed.
+   * Response verification is required by default (see `allowUnsignedResponses`).
    */
   readonly resolveResponsePublicKey?: ResolveResponsePublicKey;
+  /**
+   * Escape hatch for sandbox and testing only: accept responses that are not
+   * signed. Response verification is required by default, so the adapter refuses to
+   * construct unless it is given `resolveResponsePublicKey` or this is set true.
+   * Never set this in production.
+   */
+  readonly allowUnsignedResponses?: boolean;
+}
+
+/** A serializable snapshot of a consent, so it can survive a restart or a new process. */
+export interface SetuConsentState {
+  readonly consentHandle: string;
+  readonly fiTypes: FiType[];
+  readonly dataRange: { from: string; to: string };
+  readonly consentId?: string;
+  readonly consentArtefactSignature?: string;
 }
 
 interface SetuConsentRecord {
@@ -143,6 +158,7 @@ export class SetuAdapter implements AAAdapter {
   private readonly vuaHandle: string;
   private readonly redirectUrl: string;
   private readonly resolveResponsePublicKey?: ResolveResponsePublicKey;
+  private readonly allowUnsignedResponses: boolean;
   private readonly consents = new Map<string, SetuConsentRecord>();
   private readonly pendingSessions = new Map<
     string,
@@ -163,6 +179,11 @@ export class SetuAdapter implements AAAdapter {
     this.vuaHandle = options.vuaHandle ?? '@onemoney';
     this.redirectUrl = options.redirectUrl ?? 'https://localhost/aa/redirect';
     this.resolveResponsePublicKey = options.resolveResponsePublicKey;
+    this.allowUnsignedResponses = options.allowUnsignedResponses ?? false;
+    if (!options.resolveResponsePublicKey && !this.allowUnsignedResponses) {
+      // Fail closed by default: production must verify AA response signatures.
+      throw new SahajError('INVALID_INPUT', { field: 'resolveResponsePublicKey' });
+    }
   }
 
   async createConsent(request: ConsentRequest): Promise<AdapterConsent> {
@@ -299,7 +320,7 @@ export class SetuAdapter implements AAAdapter {
     const results: FetchedFip[] = [];
     try {
       for (const fiEntry of fiEntries) {
-        results.push(this.decryptFipEntry(fiEntry, pending));
+        results.push(...this.decryptFipEntry(fiEntry, pending));
       }
     } finally {
       // The ephemeral private key is single-use; drop and zeroize it.
@@ -309,17 +330,22 @@ export class SetuAdapter implements AAAdapter {
     return results;
   }
 
+  /**
+   * Decrypt every account block a FIP returned. A FIP carries one KeyMaterial and a
+   * `data` array with one encrypted block per linked account, so this yields one
+   * FetchedFip per account rather than dropping all but the first.
+   */
   private decryptFipEntry(
     fiEntry: Record<string, unknown>,
     pending: { curve: DhCurve; privateKey: Uint8Array; nonce: Uint8Array },
-  ): FetchedFip {
+  ): FetchedFip[] {
     const fipId = stringField(fiEntry, 'fipID') ?? stringField(fiEntry, 'fipId') ?? 'unknown-fip';
     const fipName = stringField(fiEntry, 'fipName') ?? fipId;
 
     const keyMaterialJson = nestedObject(fiEntry, 'KeyMaterial');
     const dataEntries = arrayField(fiEntry, 'data');
     if (!keyMaterialJson || dataEntries.length === 0) {
-      return { fipId, fipName, status: 'FAILED', fiType: 'DEPOSIT' };
+      return [{ fipId, fipName, status: 'FAILED', fiType: 'DEPOSIT' }];
     }
 
     let fipKeyMaterial: ReturnType<typeof parseKeyMaterialJson>;
@@ -327,16 +353,26 @@ export class SetuAdapter implements AAAdapter {
       // biome-ignore lint/suspicious/noExplicitAny: bridging untyped upstream JSON into the typed parser.
       fipKeyMaterial = parseKeyMaterialJson(keyMaterialJson as any, pending.curve);
     } catch {
-      return { fipId, fipName, status: 'FAILED', fiType: 'DEPOSIT' };
+      return [{ fipId, fipName, status: 'FAILED', fiType: 'DEPOSIT' }];
     }
 
-    const firstData = dataEntries[0];
-    const encryptedFi = firstData ? stringField(firstData, 'encryptedFI') : undefined;
+    return dataEntries.map((dataEntry) =>
+      this.decryptAccountBlock(dataEntry, fipKeyMaterial, pending, fipId, fipName),
+    );
+  }
+
+  private decryptAccountBlock(
+    dataEntry: Record<string, unknown>,
+    fipKeyMaterial: ReturnType<typeof parseKeyMaterialJson>,
+    pending: { curve: DhCurve; privateKey: Uint8Array; nonce: Uint8Array },
+    fipId: string,
+    fipName: string,
+  ): FetchedFip {
+    const encryptedFi = stringField(dataEntry, 'encryptedFI');
     if (!encryptedFi) {
       return { fipId, fipName, status: 'FAILED', fiType: 'DEPOSIT' };
     }
 
-    let payload: RawDepositFi;
     try {
       const plaintext = decryptFi({
         curve: fipKeyMaterial.curve,
@@ -346,15 +382,42 @@ export class SetuAdapter implements AAAdapter {
         peerNonce: fipKeyMaterial.nonce,
         ciphertextWithTag: base64ToBytes(encryptedFi, 'encryptedFI'),
       });
-      payload = extractDepositPayload(JSON.parse(new TextDecoder().decode(plaintext)));
+      const payload = extractDepositPayload(JSON.parse(new TextDecoder().decode(plaintext)));
+      return { fipId, fipName, status: 'DELIVERED', fiType: 'DEPOSIT', payload };
     } catch (cause) {
       if (cause instanceof SahajError) {
         return { fipId, fipName, status: 'FAILED', fiType: 'DEPOSIT' };
       }
       throw new SahajError('DECRYPTION_FAILED', { fipId, cause });
     }
+  }
 
-    return { fipId, fipName, status: 'DELIVERED', fiType: 'DEPOSIT', payload };
+  /**
+   * Export a consent as a serializable snapshot. A server persists this after
+   * creating the consent, so a later request or a fresh process can rehydrate it
+   * with `hydrateConsentState` before creating a data session. The ephemeral
+   * session key is not part of this: `createSession` and `fetchData` run together.
+   */
+  exportConsentState(consentHandle: string): SetuConsentState {
+    const record = this.requireConsent(consentHandle);
+    return {
+      consentHandle: record.consentHandle,
+      fiTypes: [...record.fiTypes],
+      dataRange: { ...record.dataRange },
+      consentId: record.consentId,
+      consentArtefactSignature: record.consentArtefactSignature,
+    };
+  }
+
+  /** Restore a consent snapshot into a fresh adapter, e.g. after a restart. */
+  hydrateConsentState(state: SetuConsentState): void {
+    this.consents.set(state.consentHandle, {
+      consentHandle: state.consentHandle,
+      fiTypes: [...state.fiTypes],
+      dataRange: { ...state.dataRange },
+      consentId: state.consentId,
+      consentArtefactSignature: state.consentArtefactSignature,
+    });
   }
 
   private requireConsent(consentId: string): SetuConsentRecord {

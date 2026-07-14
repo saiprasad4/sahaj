@@ -88,7 +88,12 @@ export type {
 
 // ── Setu adapter ─────────────────────────────────────────────────────────────
 export { SetuAdapter } from './adapters/setu';
-export type { SetuAdapterOptions, FetchLike, ResolveResponsePublicKey } from './adapters/setu';
+export type {
+  SetuAdapterOptions,
+  SetuConsentState,
+  FetchLike,
+  ResolveResponsePublicKey,
+} from './adapters/setu';
 
 // ── Sandbox ──────────────────────────────────────────────────────────────────
 export { MockAdapter } from './adapters/mock';

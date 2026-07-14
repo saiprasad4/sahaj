@@ -207,7 +207,9 @@ export class AA {
       return new MockAdapter(options.sandbox);
     }
     if (options.mode === 'setu-sandbox' && options.setu) {
-      return new SetuAdapter(options.setu);
+      // Sandbox convenience: accept unsigned responses unless the caller opts in to
+      // verification. Production builds its own adapter and stays fail-closed.
+      return new SetuAdapter({ allowUnsignedResponses: true, ...options.setu });
     }
     throw new SahajError('PRODUCTION_NOT_CONFIGURED');
   }

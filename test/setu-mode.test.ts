@@ -37,6 +37,7 @@ describe('AA in Setu modes', () => {
       clientApiKey: 'k',
       fiuId: 'f',
       signer: makeSigner(),
+      resolveResponsePublicKey: () => '', // production must verify responses
     });
     const aa = new AA({ mode: 'production', adapter });
     expect(aa.mode).toBe('production');
@@ -52,6 +53,7 @@ describe('AA in Setu modes', () => {
       clientApiKey: 'k',
       fiuId: 'f',
       signer: makeSigner(),
+      resolveResponsePublicKey: () => '', // production must verify responses
     });
     const aa = new AA({ mode: 'production', adapter });
     expect(() => aa.sandbox.approve('anything')).toThrow(SahajError);
