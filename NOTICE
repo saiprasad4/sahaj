@@ -20,6 +20,17 @@ advice. You are solely responsible for your regulatory eligibility and for
 compliance with the RBI NBFC-Account Aggregator Master Directions and the
 Digital Personal Data Protection Act, 2023.
 
-"Account Aggregator", "ReBIT", "Sahamati", "NPCI", and "UPI" are used only
-descriptively to identify the ecosystem this library targets, and remain the
-marks of their respective owners.
+"Account Aggregator", "ReBIT", "Sahamati", "NPCI", "UPI", "Setu", "Agya", and
+"Pine Labs" are used only descriptively to identify the ecosystem and the
+provider this library targets, and remain the marks of their respective owners.
+Their use here does not imply any endorsement, sponsorship, certification, or
+source identity.
+
+---
+
+This product depends on the following open-source libraries, used under their
+respective licenses:
+
+- @noble/curves, @noble/ciphers, @noble/hashes (MIT) ... elliptic-curve,
+  cipher, and hash primitives for the FI encryption scheme.
+- jose (MIT) ... JSON Web Signature verification for detached request signing.

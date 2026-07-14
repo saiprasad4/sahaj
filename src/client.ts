@@ -5,6 +5,7 @@ import {
   supportsSandboxControls,
 } from './adapters/adapter';
 import { MockAdapter } from './adapters/mock';
+import { SetuAdapter, type SetuAdapterOptions } from './adapters/setu';
 import { SahajError } from './errors';
 import { isFiType } from './fi-types';
 import { type DepositAccount, type FinancialData, type FipResult, parseDepositAccount } from './models';
@@ -15,13 +16,19 @@ import { type DepositAccount, type FinancialData, type FipResult, parseDepositAc
  * parsed financial data. The poll, session, decrypt and parse steps stay hidden.
  */
 
-export type Mode = 'sandbox' | 'production';
+export type Mode = 'sandbox' | 'production' | 'setu-sandbox';
 
 export interface AAOptions {
   readonly mode: Mode;
-  /** Provide your own AA adapter. Sandbox defaults to the in-memory mock. */
+  /**
+   * Provide your own AA adapter. `sandbox` defaults to the in-memory mock;
+   * `production` and `setu-sandbox` need a real adapter (or, for `setu-sandbox`,
+   * the `setu` config below).
+   */
   readonly adapter?: AAAdapter;
   readonly sandbox?: { autoApprove?: boolean; seed?: number };
+  /** Config for the built-in Setu adapter when `mode: 'setu-sandbox'` and no adapter is given. */
+  readonly setu?: SetuAdapterOptions;
   /** How many times `data.fetch` polls consent status before giving up. Default 20. */
   readonly maxPollAttempts?: number;
 }
@@ -198,6 +205,11 @@ export class AA {
     }
     if (options.mode === 'sandbox') {
       return new MockAdapter(options.sandbox);
+    }
+    if (options.mode === 'setu-sandbox' && options.setu) {
+      // Sandbox convenience: accept unsigned responses unless the caller opts in to
+      // verification. Production builds its own adapter and stays fail-closed.
+      return new SetuAdapter({ allowUnsignedResponses: true, ...options.setu });
     }
     throw new SahajError('PRODUCTION_NOT_CONFIGURED');
   }
