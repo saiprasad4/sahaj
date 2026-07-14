@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sahaj"
+version = "0.0.1"
+description = "AA-agnostic SDK for India's Account Aggregator ecosystem: run the full consent-to-data loop in a zero-registration sandbox, get typed and parsed ReBIT financial data. Independent open-source library."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [{ name = "Saiprasad Shankar", email = "saiprasad.shankar@gmail.com" }]
+keywords = [
+  "account-aggregator",
+  "aa",
+  "rebit",
+  "fiu",
+  "fip",
+  "open-banking",
+  "consent",
+  "financial-data",
+  "india",
+  "fintech",
+]
+dependencies = ["pydantic>=2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/saiprasad4/sahaj"
+Issues = "https://github.com/saiprasad4/sahaj/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sahaj"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
